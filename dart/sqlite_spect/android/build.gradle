@@ -1,0 +1,55 @@
+// Minimal Android module for the sqlite_spect Flutter FFI plugin.
+//
+// The Dart-facing API lives entirely in `../lib`; this module exists only so
+// Flutter's plugin discovery works and so the .so files produced by cargo can
+// be packaged into the consumer app's APK.
+//
+// Build model:
+//   Consumers who already have the Rust workspace present run
+//   `./scripts/build_android.sh <ndk-path>` from the plugin root — that
+//   produces libsqlite_spect_ffi.so per ABI under
+//   `src/main/jniLibs/<abi>/` before the Gradle build packages them.
+//
+// A future revision will replace this with cargokit-managed automatic builds.
+//
+// Kotlin compilation comes from Flutter's built-in Kotlin (AGP 9+,
+// android.builtInKotlin=true in the consuming app). Do not re-add the legacy
+// `kotlin-android` plugin here — future Flutter versions reject it.
+
+group 'com.sqlite_spect'
+version '0.1.0'
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    if (project.android.hasProperty("namespace")) {
+        namespace 'com.sqlite_spect'
+    }
+    compileSdk 34
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk 21
+    }
+
+    sourceSets {
+        main.jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}

@@ -1,0 +1,32 @@
+name: sqlite_spect_example
+description: Example Flutter app driving the sqlite_spect plugin — a counter
+  persisted to a SQLite file, with the inspector wired up in debug mode.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # A real SQLite client so the counter has something to persist to.
+  # Mobile-only build (Android + iOS) — no sqflite_common_ffi needed.
+  sqflite: ^2.3.0
+  path_provider: ^2.1.0
+  path: ^1.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # The plugin under test — path-linked so `flutter run` in this dir picks
+  # up local changes without a publish step.
+  sqlite_spect:
+    path: ../
+
+flutter:
+  uses-material-design: true

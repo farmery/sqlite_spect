@@ -1,0 +1,90 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ------------------------------------------------------------
+    // Flutter example app — needs the Dart-Code extension.
+    // Pick the device in the VS Code status bar (bottom right)
+    // before launching. Hot reload = save-on-file; hot restart = ⇧⌘F5.
+    // ------------------------------------------------------------
+    {
+      "name": "Flutter: example app (debug)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "cwd": "${workspaceFolder}/dart/sqlite_spect/example",
+      "flutterMode": "debug",
+      "preLaunchTask": "build: ffi + client"
+    },
+    {
+      "name": "Flutter: example app (profile)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "cwd": "${workspaceFolder}/dart/sqlite_spect/example",
+      "flutterMode": "profile",
+      "preLaunchTask": "build: ffi + client"
+    },
+
+    // ------------------------------------------------------------
+    // Rust CLI — needs the CodeLLDB extension (vadimcn.vscode-lldb).
+    // "preLaunchTask" rebuilds the debug binary so breakpoints in Rust
+    // hit against fresh code, not a stale target/debug/*.
+    // ------------------------------------------------------------
+    {
+      "name": "CLI: serve <db-path>",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/sqlite_spect",
+      "args": ["${input:dbPath}", "-v"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo: build cli (debug)"
+    },
+    {
+      "name": "CLI: attach --watch",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/sqlite_spect",
+      "args": ["attach", "--watch"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo: build cli (debug)"
+    },
+    {
+      "name": "CLI: list",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/sqlite_spect",
+      "args": ["list"],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo: build cli (debug)"
+    },
+
+    // ------------------------------------------------------------
+    // Rust tests — great for stepping through server / FFI logic.
+    // ------------------------------------------------------------
+    {
+      "name": "Rust: debug test in cursor",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--features",
+          "cli",
+          "--package",
+          "sqlite_spect_core"
+        ]
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "dbPath",
+      "type": "promptString",
+      "description": "Absolute path to a .db file to inspect",
+      "default": "/tmp/counter.db"
+    }
+  ]
+}

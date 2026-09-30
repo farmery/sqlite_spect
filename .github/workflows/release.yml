@@ -1,0 +1,265 @@
+name: Release
+
+# Trigger by pushing a version tag, e.g.:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Workflow:
+#   1. build-client  — npm build; dist/ is embedded into Rust via rust-embed
+#   2. build-android — cross-compile .so for each ABI (needs dist/ baked in)
+#   3. build-ios     — build iOS xcframework (needs dist/ baked in)
+#   4. build-cli     — build sqlite_spect CLI for macOS/Linux/Windows hosts
+#   5. publish       — collect artifacts, create GitHub release, publish to pub.dev
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Step 1: Build the React/Vite web client.
+  # The dist/ output is embedded into the Rust binary at compile time via
+  # rust-embed, so this must complete before any Rust build job starts.
+  # ---------------------------------------------------------------------------
+  build-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/sqlite_spect_client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client/sqlite_spect_client
+        run: npm ci
+
+      - name: Build web client
+        working-directory: client/sqlite_spect_client
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/sqlite_spect_client/dist/
+
+  # ---------------------------------------------------------------------------
+  # Step 2a: Cross-compile .so for Android ABIs.
+  # Produces jniLibs/{arm64-v8a,armeabi-v7a,x86_64}/libsqlite_spect_ffi.so
+  # ---------------------------------------------------------------------------
+  build-android:
+    needs: build-client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore web client dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client/sqlite_spect_client/dist/
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Install Android NDK r25c
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r25c
+
+      - name: Build Android .so files
+        run: bash dart/sqlite_spect/scripts/build_android.sh
+        env:
+          NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-jniLibs
+          path: dart/sqlite_spect/android/src/main/jniLibs/
+
+  # ---------------------------------------------------------------------------
+  # Step 2c: Build the standalone `sqlite_spect` CLI for each host OS/arch.
+  # Produces archives named sqlite_spect-<tag>-<target>.{tar.gz,zip}
+  # that get attached to the GitHub release for direct download.
+  # ---------------------------------------------------------------------------
+  build-cli:
+    needs: build-client
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore web client dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client/sqlite_spect_client/dist/
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Build CLI
+        working-directory: crates/sqlite_spect_core
+        run: cargo build --release --features cli --target ${{ matrix.target }} --bin sqlite_spect
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf "${{ github.workspace }}/sqlite_spect-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" sqlite_spect
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path sqlite_spect.exe -DestinationPath "${{ github.workspace }}/sqlite_spect-${{ github.ref_name }}-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: sqlite_spect-${{ github.ref_name }}-${{ matrix.target }}.*
+
+  # ---------------------------------------------------------------------------
+  # Step 2b: Build the iOS xcframework (device + simulator slices).
+  # Runs in parallel with build-android (both depend only on build-client).
+  # ---------------------------------------------------------------------------
+  build-ios:
+    needs: build-client
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore web client dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client/sqlite_spect_client/dist/
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-apple-ios,
+            aarch64-apple-ios-sim,
+            x86_64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios
+
+      - name: Build iOS xcframework
+        run: bash dart/sqlite_spect/scripts/build_ios.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-frameworks
+          path: dart/sqlite_spect/ios/Frameworks/
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Assemble artifacts, cut a GitHub release, publish to pub.dev.
+  #
+  # pub.dev OIDC publishing setup (one-time, on pub.dev):
+  #   https://dart.dev/tools/pub/automated-publishing
+  #   Publisher → Automated publishing → GitHub Actions
+  #   Repository: farmery/sqlite_spect   Tag pattern: v*
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: [build-android, build-ios, build-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create GitHub release + upload release assets
+      id-token: write   # pub.dev OIDC token exchange
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Android jniLibs
+        uses: actions/download-artifact@v4
+        with:
+          name: android-jniLibs
+          path: dart/sqlite_spect/android/src/main/jniLibs/
+
+      - name: Restore iOS Frameworks
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-frameworks
+          path: dart/sqlite_spect/ios/Frameworks/
+
+      - name: Restore CLI archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: cli-release/
+
+      - name: Verify expected binaries are present
+        run: |
+          set -e
+          check() { [ -e "$1" ] && echo "  ok  $1" || { echo "MISSING: $1"; exit 1; }; }
+          check dart/sqlite_spect/android/src/main/jniLibs/arm64-v8a/libsqlite_spect_ffi.so
+          check dart/sqlite_spect/android/src/main/jniLibs/armeabi-v7a/libsqlite_spect_ffi.so
+          check dart/sqlite_spect/android/src/main/jniLibs/x86_64/libsqlite_spect_ffi.so
+          check dart/sqlite_spect/ios/Frameworks/sqlite_spect_ffi.xcframework
+          check "cli-release/sqlite_spect-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+          check "cli-release/sqlite_spect-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
+          check "cli-release/sqlite_spect-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+          check "cli-release/sqlite_spect-${GITHUB_REF_NAME}-x86_64-pc-windows-msvc.zip"
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd cli-release
+          sha256sum sqlite_spect-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            cli-release/sqlite_spect-*.tar.gz
+            cli-release/sqlite_spect-*.zip
+            cli-release/SHA256SUMS.txt
+
+      - name: Ship native artifacts in the pub package
+        # `pub publish` excludes gitignored files, so the freshly built
+        # jniLibs/Frameworks/Libraries must be un-ignored before packaging
+        # or the published plugin would be missing its native libraries.
+        run: |
+          sed -i \
+            -e 's|^dart/sqlite_spect/android/src/main/jniLibs/|# &|' \
+            -e 's|^dart/sqlite_spect/ios/Frameworks/|# &|' .gitignore
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Publish to pub.dev
+        working-directory: dart/sqlite_spect
+        run: flutter pub publish --force

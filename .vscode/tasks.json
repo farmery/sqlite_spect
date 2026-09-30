@@ -1,0 +1,55 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo: build cli (debug)",
+      "type": "cargo",
+      "command": "build",
+      "args": [
+        "--features",
+        "cli",
+        "-p",
+        "sqlite_spect_core"
+      ],
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "cargo: build ffi (release)",
+      "type": "cargo",
+      "command": "build",
+      "args": [
+        "--release",
+        "-p",
+        "sqlite_spect_ffi"
+      ],
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "cargo: test all",
+      "type": "cargo",
+      "command": "test",
+      "args": ["--features", "cli"],
+      "problemMatcher": ["$rustc"],
+      "group": "test"
+    },
+    {
+      "label": "client: build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": {
+        "cwd": "${workspaceFolder}/client/sqlite_spect_client"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "build: ffi + client",
+      "dependsOn": ["cargo: build ffi (release)", "client: build"],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+[package]
+name = "sqlite_spect_core"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sqlite_spect"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "sqlite_spect_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+cli = []
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-embed = "8"
+mime_guess = "2"
+uuid = { version = "1", features = ["v4"] }
+tower-http = { version = "0.5", features = ["fs"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+if-addrs = "0.13"
+mdns-sd = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

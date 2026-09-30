@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sqlite_spect_core",
+    "crates/sqlite_spect_ffi",
+]
+
+# The native libraries ship inside the pub package — keep them lean.
+# FFI-exports survive `strip` (only the symbol/debug tables go), and fat LTO
+# lets the linker drop the code that never gets called.
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1

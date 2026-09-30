@@ -1,0 +1,38 @@
+name: sqlite_spect
+description: In-app SQLite inspector for Flutter (debug/staging only).
+version: 0.1.0
+homepage: https://github.com/farmery/sqlite_spect
+repository: https://github.com/farmery/sqlite_spect
+
+environment:
+  sdk: ">=3.12.0 <4.0.0"
+  flutter: ">=3.44.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# FFI plugin: no method channels. Platform shells exist for plugin discovery
+# but do not proxy calls; Dart talks to the Rust cdylib via dart:ffi.
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.sqlite_spect
+        pluginClass: SqliteSpectPlugin
+        ffiPlugin: true
+      ios:
+        pluginClass: SqliteSpectPlugin
+        ffiPlugin: true
+      linux:
+        pluginClass: SqliteSpectPlugin
+        ffiPlugin: true
+      windows:
+        pluginClass: SqliteSpectPlugin
+        ffiPlugin: true

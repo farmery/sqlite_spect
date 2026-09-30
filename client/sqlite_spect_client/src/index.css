@@ -1,0 +1,10 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a0a0a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#root {
+  min-height: 100vh;
+}

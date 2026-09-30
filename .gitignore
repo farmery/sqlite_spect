@@ -1,0 +1,28 @@
+# Rust
+target/
+
+# React client build output (embedded into Rust binary at compile time)
+client/sqlite_spect_client/dist/
+client/sqlite_spect_client/node_modules/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.freezed.dart
+*.g.dart
+build/
+pubspec.lock
+
+# Generated FFI bindings
+crates/sqlite_spect_ffi/src/bridge_generated.rs
+dart/sqlite_spect/lib/src/rust/
+
+# macOS
+.DS_Store
+
+# Native build artifacts — built from source via scripts/ (see CONTRIBUTING).
+# The release workflow comments these lines out before `flutter pub publish`
+# so the binaries ship inside the published pub package.
+# dart/sqlite_spect/android/src/main/jniLibs/
+# dart/sqlite_spect/ios/Frameworks/
