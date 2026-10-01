@@ -115,11 +115,39 @@ embedded web client against a local SQLite file:
 
 ## Release
 
-`./release.sh X.Y.Z ["note"]` from the repo root (main only, clean tree,
-synced with origin). Bumps `dart/sqlite_spect/pubspec.yaml`, prepends
-`CHANGELOG.md`, commits, tags `vX.Y.Z`, pushes; CI builds everything and
-publishes to pub.dev via OIDC. Plugin version lives in the pubspec; Rust
-crates are versioned independently.
+`./release.sh X.Y.Z ["one-line note"]` from the repo root drives the whole
+release. Steps, including the gotchas hit during the v0.2.1 release:
+
+```bash
+# 1. Pre-flight: commit AND push all work — the script dies if the tree is
+#    dirty or main is out of sync with origin/main.
+git push origin main
+
+# 2. If CHANGELOG.md has an "## Unreleased" section, fold its bullets into
+#    the release note and delete the section first — release.sh blindly
+#    prepends the new "## X.Y.Z" entry on top, which would strand
+#    "## Unreleased" below the new version.
+
+# 3. Release (the script prompts for confirmation; pipe "y" when scripted).
+#    It bumps dart/sqlite_spect/pubspec.yaml, prepends a CHANGELOG entry,
+#    commits "chore: release vX.Y.Z", tags vX.Y.Z, and pushes main + tag.
+printf 'y\n' | ./release.sh 0.2.1 "One-line release note."
+
+# 4. Watch CI build + publish (no manual steps, no stored credentials —
+#    pub.dev publishing uses OIDC).
+gh run list --workflow release.yml --limit 1     # grab the run id
+gh run watch <run-id> --exit-status
+
+# 5. Verify the three outcomes.
+gh release view vX.Y.Z                           # GitHub release + CLI binaries
+curl -s https://pub.dev/api/packages/sqlite_spect | jq '.latest.version'  # pub.dev
+```
+
+Notes: version lives in `dart/sqlite_spect/pubspec.yaml` only (Rust crates
+are versioned independently); CI builds the web client, Android/iOS native
+libs, and per-OS CLI binaries, cuts the GitHub release with SHA256SUMS, and
+publishes the package. The script also refuses to run if the tag already
+exists locally or on origin.
 
 ## Known gaps (intentional, don't "fix" silently)
 
