@@ -58,6 +58,19 @@ workflow builds these same artifacts in CI and re-includes them in the
 published package (by commenting out their `.gitignore` entries right
 before `flutter pub publish`).
 
+## Releasing
+
+From the repository root:
+
+```bash
+./release.sh 0.2.0                # or: ./release.sh 0.2.0 "One-line note"
+```
+
+This bumps the pubspec version, prepends a CHANGELOG entry, commits, tags
+`v<version>`, and pushes. The Release workflow then builds the web client,
+native libraries, and CLI binaries, cuts the GitHub release, and publishes
+the package to pub.dev via OIDC — no manual steps, no stored credentials.
+
 ## Known gaps / TODOs
 
 **iOS `attach`** — `cmd_attach_ios` in `crates/sqlite_spect_core/src/attach.rs`
