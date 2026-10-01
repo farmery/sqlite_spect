@@ -1,10 +1,3 @@
-## Unreleased
-
-* Editing is a work in progress: data editing in the inspector UI (cell edits,
-  add/delete row, clear table) is temporarily disabled while a bug is
-  investigated. The SQL Runner still runs arbitrary statements and now warns
-  that write statements may corrupt your database.
-
 ## 0.2.0
 
 * No code changes — validates the automated release pipeline (GitHub Release + pub.dev OIDC publishing).
