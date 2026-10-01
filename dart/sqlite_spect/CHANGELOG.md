@@ -1,3 +1,7 @@
+## 0.2.1
+
+* Data editing in the inspector UI is temporarily disabled (work in progress) while a bug is investigated; the SQL Runner still runs arbitrary statements and now warns that write statements may corrupt your database.
+
 ## 0.2.0
 
 * No code changes — validates the automated release pipeline (GitHub Release + pub.dev OIDC publishing).
