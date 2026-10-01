@@ -256,6 +256,13 @@ jobs:
             -e 's|^dart/sqlite_spect/android/src/main/jniLibs/|# &|' \
             -e 's|^dart/sqlite_spect/ios/Frameworks/|# &|' .gitignore
 
+      # Provisions the pub.dev OIDC credentials: setup-dart fetches the
+      # GitHub OIDC token (audience https://pub.dev, needs id-token: write
+      # above) and registers it via `dart pub token add`. Without this step
+      # `dart pub publish` falls back to interactive browser auth, which
+      # cannot work in CI.
+      - uses: dart-lang/setup-dart@v1
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
