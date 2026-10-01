@@ -262,4 +262,4 @@ jobs:
 
       - name: Publish to pub.dev
         working-directory: dart/sqlite_spect
-        run: flutter pub publish --force
+        run: dart pub publish --force
