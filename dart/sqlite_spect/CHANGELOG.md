@@ -1,3 +1,7 @@
+## 0.2.0
+
+* No code changes — validates the automated release pipeline (GitHub Release + pub.dev OIDC publishing).
+
 ## 0.1.0
 
 * Initial public release: in-app SQLite inspector for Flutter (debug/staging
