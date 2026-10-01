@@ -73,6 +73,13 @@ the package to pub.dev via OIDC — no manual steps, no stored credentials.
 
 ## Known gaps / TODOs
 
+**Editing is WIP** — data editing in the inspector UI (cell edits, add/delete
+row, clear table) is temporarily disabled while a bug in the mutation path is
+investigated. The gate is client-side only, in
+`client/sqlite_spect_client/src/editing.ts` (`EDITING_ENABLED = false`) — the
+server RPCs remain available and the SQL Runner still executes arbitrary SQL,
+with an on-screen warning that write statements may corrupt the database.
+
 **iOS `attach`** — `cmd_attach_ios` in `crates/sqlite_spect_core/src/attach.rs`
 exits immediately with an error. Needs implementation for both simulator (simctl)
 and physical device (mDNS) discovery.

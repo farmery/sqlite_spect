@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRpc } from '../RpcContext'
+import { EDITING_ENABLED } from '../editing'
 import type { DbInfo, ModalRequest, MutationEvent, Schema, Selection } from '../types'
 
 type Props = {
@@ -190,6 +191,8 @@ export function Sidebar({ selection, onSelect, onOpenModal }: Props) {
                                 <>
                                   <button
                                     className="menu-item"
+                                    disabled={!EDITING_ENABLED}
+                                    title={EDITING_ENABLED ? undefined : 'Work in progress — editing is temporarily disabled'}
                                     onClick={() => {
                                       setOpenMenu(null)
                                       onOpenModal({ kind: 'insert', db: db.id, table: t.name })
@@ -199,6 +202,8 @@ export function Sidebar({ selection, onSelect, onOpenModal }: Props) {
                                   </button>
                                   <button
                                     className="menu-item menu-item-danger"
+                                    disabled={!EDITING_ENABLED}
+                                    title={EDITING_ENABLED ? undefined : 'Work in progress — editing is temporarily disabled'}
                                     onClick={() => {
                                       setOpenMenu(null)
                                       onOpenModal({ kind: 'clear', db: db.id, table: t.name })

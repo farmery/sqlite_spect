@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from 'react'
 import { useRpc } from '../RpcContext'
+import { SQL_WRITE_WIP_WARNING } from '../editing'
 import type { ExecuteResult, QueryResult } from '../types'
 import { CellValue, formatDuration } from './CellValue'
 
@@ -66,6 +67,10 @@ export function SqlRunner({ db }: Props) {
           {running ? 'Running…' : 'Run  ⌘↵'}
         </button>
       </header>
+
+      <div className="banner banner-warn">
+        <span>⚠ {SQL_WRITE_WIP_WARNING}</span>
+      </div>
 
       <div className="sql-editor">
         <textarea

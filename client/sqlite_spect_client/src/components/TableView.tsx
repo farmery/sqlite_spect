@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { EDITING_ENABLED } from '../editing'
 import { useColResize } from '../hooks/useColResize'
 import { useRowEdit } from '../hooks/useRowEdit'
 import { useTableData } from '../hooks/useTableData'
@@ -82,7 +83,7 @@ export function TableView({ db, table, onOpenModal }: Props) {
       </header>
 
       {/* ---- Banners ---- */}
-      {rowKey?.kind === 'none' && (
+      {EDITING_ENABLED && rowKey?.kind === 'none' && (
         <div className="banner banner-info">
           This table has no primary key or rowid — editing is disabled.
         </div>

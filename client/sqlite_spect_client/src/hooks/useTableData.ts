@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRpc } from '../RpcContext'
+import { EDITING_ENABLED } from '../editing'
 import type { Cell, MutationEvent, Row, RowKey, TableInfo, TableRowsResult } from '../types'
 
 const PAGE_SIZE = 50
@@ -75,7 +76,7 @@ export function useTableData(db: string, table: string) {
   const idAlias = rowKey?.kind === 'rowid' ? rowKey.alias : null
   const displayCols = result ? result.columns.filter((c) => c !== idAlias) : []
   const pkCols = new Set<string>(rowKey?.kind === 'pk' ? rowKey.cols : [])
-  const canWrite = result !== null && rowKey?.kind !== 'none'
+  const canWrite = EDITING_ENABLED && result !== null && rowKey?.kind !== 'none'
   const hasPrev = offset > 0
   const hasNext = result?.hasMore ?? false
 

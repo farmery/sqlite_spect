@@ -1,7 +1,13 @@
 # sqlite_spect
 
-In-app SQLite inspector for Flutter — browse, query, and edit your SQLite
-databases live from a browser.
+In-app SQLite inspector for Flutter — browse, query, and (once editing is
+fixed) edit your SQLite databases live from a browser.
+
+> **⚠️ Editing is a work in progress.** Data editing in the inspector UI
+> (cell edits, add/delete row, clear table) is temporarily disabled while a
+> bug is investigated. The SQL Runner still executes arbitrary statements —
+> be aware that write statements may misbehave and could corrupt your
+> database.
 
 A Rust engine is embedded into your app via `dart:ffi`; it serves the
 inspector UI (an embedded web client) over a loopback HTTP+WebSocket server.
