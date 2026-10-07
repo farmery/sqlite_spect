@@ -8,6 +8,15 @@ pub mod server;
 
 pub const DEFAULT_PORT: u16 = 8123;
 
+/// Engine version reported by `server.info` and the CLI's `--version`.
+/// Release builds stamp SQLITE_SPECT_CLI_VERSION=<tag> (release.yml); local
+/// builds fall back to the crate version, which is versioned independently
+/// of the pub package.
+pub const VERSION: &str = match option_env!("SQLITE_SPECT_CLI_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 /// A stable, short host-platform name used in banners, TXT records, and the
 /// state file. Matches the `platform` enum in the FFI config JSON.
 pub fn host_platform() -> &'static str {

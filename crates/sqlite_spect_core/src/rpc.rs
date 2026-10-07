@@ -4,11 +4,20 @@ use serde_json::Value;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+// Which connection a request arrived on. Push methods (subscriptions) only
+// work over WebSocket — HTTP has no server→client channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Ws,
+    Http,
+}
+
 // Everything a handler might need. Passed by ref through dispatch.
 pub struct Ctx<'a> {
     pub registry: &'a DbRegistry,
     pub subs: &'a MutationSubs,
     pub tx: &'a mpsc::Sender<String>,
+    pub transport: Transport,
 }
 
 // Parses params into T, returning early from the enclosing fn with a serialised error
@@ -26,7 +35,7 @@ macro_rules! try_params {
 }
 
 // Error codes from the spec
-const ERR_INVALID_REQUEST: i32 = -32600;
+pub const ERR_INVALID_REQUEST: i32 = -32600;
 const ERR_METHOD_NOT_FOUND: i32 = -32601;
 const ERR_INVALID_PARAMS: i32 = -32602;
 #[allow(dead_code)]
@@ -37,6 +46,28 @@ const ERR_READ_ONLY: i32 = -32000;
 const ERR_UNKNOWN_DB: i32 = -32001;
 #[allow(dead_code)]
 const ERR_SQL: i32 = -32002;
+const ERR_PUSH_OVER_HTTP: i32 = -32010;
+
+/// Every JSON-RPC method this build dispatches. Served by `server.info`
+// so scripts/agents can discover the API at runtime; keep in sync with
+// the dispatch match below.
+const METHODS: &[&str] = &[
+    "server.info",
+    "db.list",
+    "db.schema",
+    "db.tableInfo",
+    "db.query",
+    "db.execute",
+    "db.tableRows",
+    "db.updateRow",
+    "db.insertRow",
+    "db.deleteRow",
+    "db.clearTable",
+    "db.subscribe",
+    "db.unsubscribe",
+    "probe.tail",
+    "probe.untail",
+];
 
 // --- Envelopes ---
 
@@ -175,6 +206,7 @@ pub async fn dispatch(raw: &str, ctx: &Ctx<'_>, sock_id: &str) -> String {
     let method = req.method.clone();
 
     let response = match req.method.as_str() {
+        "server.info"    => handle_server_info(id).await,
         "db.list"        => handle_db_list(id, ctx).await,
         "db.schema"      => handle_db_schema(id, req.params, ctx).await,
         "db.tableInfo"   => handle_db_table_info(id, req.params, ctx).await,
@@ -187,8 +219,8 @@ pub async fn dispatch(raw: &str, ctx: &Ctx<'_>, sock_id: &str) -> String {
         "db.clearTable"  => handle_db_clear_table(id, req.params, ctx).await,
         "db.subscribe"   => handle_db_subscribe(id, req.params, ctx).await,
         "db.unsubscribe" => handle_db_unsubscribe(id, req.params, ctx).await,
-        "probe.tail"     => handle_probe_tail(id, req.params).await,
-        "probe.untail"   => handle_probe_untail(id, req.params).await,
+        "probe.tail"     => handle_probe_tail(id, req.params, ctx).await,
+        "probe.untail"   => handle_probe_untail(id, req.params, ctx).await,
         _                => error_response(id, ERR_METHOD_NOT_FOUND, "method not found"),
     };
 
@@ -205,6 +237,20 @@ pub async fn dispatch(raw: &str, ctx: &Ctx<'_>, sock_id: &str) -> String {
 }
 
 // --- Handlers ---
+
+/// Capability probe for scripts/agents: version, platform, transports, and
+/// the full method table in one call.
+async fn handle_server_info(id: Value) -> String {
+    ok_response(
+        id,
+        serde_json::json!({
+            "version": crate::VERSION,
+            "platform": crate::host_platform(),
+            "transports": ["ws", "http"],
+            "methods": METHODS,
+        }),
+    )
+}
 
 async fn handle_db_list(id: Value, ctx: &Ctx<'_>) -> String {
     ok_response(id, ctx.registry.list())
@@ -256,24 +302,36 @@ async fn handle_db_clear_table(id: Value, params: Option<Value>, ctx: &Ctx<'_>) 
 }
 
 async fn handle_db_subscribe(id: Value, params: Option<Value>, ctx: &Ctx<'_>) -> String {
+    if ctx.transport == Transport::Http {
+        return error_response(id, ERR_PUSH_OVER_HTTP, "push methods require a WebSocket connection (/ws)");
+    }
     let p = try_params!(params, id, SubscribeParams);
     let sub_id = ctx.subs.add(p.db, p.table, ctx.tx.clone());
     ok_response(id, serde_json::json!({ "subscriptionId": sub_id }))
 }
 
 async fn handle_db_unsubscribe(id: Value, params: Option<Value>, ctx: &Ctx<'_>) -> String {
+    if ctx.transport == Transport::Http {
+        return error_response(id, ERR_PUSH_OVER_HTTP, "push methods require a WebSocket connection (/ws)");
+    }
     let p = try_params!(params, id, UnsubscribeParams);
     ctx.subs.remove(&p.subscription_id);
     ok_response(id, serde_json::json!({}))
 }
 
-async fn handle_probe_tail(id: Value, params: Option<Value>) -> String {
+async fn handle_probe_tail(id: Value, params: Option<Value>, ctx: &Ctx<'_>) -> String {
+    if ctx.transport == Transport::Http {
+        return error_response(id, ERR_PUSH_OVER_HTTP, "push methods require a WebSocket connection (/ws)");
+    }
     let p = try_params!(params, id, TailParams);
     let _ = p; // TODO: register probe subscriber in probe.rs
     ok_response(id, serde_json::json!({ "subscriptionId": "stub" }))
 }
 
-async fn handle_probe_untail(id: Value, params: Option<Value>) -> String {
+async fn handle_probe_untail(id: Value, params: Option<Value>, ctx: &Ctx<'_>) -> String {
+    if ctx.transport == Transport::Http {
+        return error_response(id, ERR_PUSH_OVER_HTTP, "push methods require a WebSocket connection (/ws)");
+    }
     let p = try_params!(params, id, UnsubscribeParams);
     let _ = p; // TODO: remove probe subscriber
     ok_response(id, serde_json::json!({}))
@@ -296,7 +354,9 @@ fn ok_response(id: Value, result: Value) -> String {
     serde_json::to_string(&RpcSuccess { jsonrpc: "2.0", result, id }).unwrap()
 }
 
-fn error_response(id: Value, code: i32, message: &str) -> String {
+// Also used by the HTTP transport in server.rs for pre-dispatch rejections
+// (batching, missing id), so the envelopes stay identical everywhere.
+pub fn error_response(id: Value, code: i32, message: &str) -> String {
     serde_json::to_string(&RpcFailure {
         jsonrpc: "2.0",
         error: RpcErrorObject { code, message: message.to_owned() },
