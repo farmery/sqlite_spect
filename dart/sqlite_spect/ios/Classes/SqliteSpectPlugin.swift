@@ -7,5 +7,6 @@ import Flutter
 public class SqliteSpectPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     // No method channels — this is an FFI plugin.
+    sqliteSpectForceLinkFfi()
   }
 }
