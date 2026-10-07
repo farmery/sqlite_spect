@@ -156,8 +156,13 @@ exists locally or on origin.
   pending a data-mutation bug investigation. The server RPCs and the SQL
   Runner are intentionally left enabled — don't "complete" the disable by
   touching them.
-- iOS `attach`: `cmd_attach_ios` in `crates/sqlite_spect_core/src/attach.rs`
-  is a stub that exits with an error.
+- iOS `attach` (`--platform ios` in `crates/sqlite_spect_core/src/attach.rs`):
+  mDNS network discovery; same-host hits (simulator apps share the host
+  network) are rewritten to 127.0.0.1. Physical devices over Wi-Fi are
+  untested. The iOS plugin only links because
+  `ios/Classes/FfiLink.swift` keeps the Rust archive's symbols past the
+  linker's dead stripping — don't delete that file (or the `register()`
+  call) if you touch the iOS shell.
 - Probe streaming: `probe.tail` / `probe.untail` in `rpc.rs` are stubbed with
   TODOs; queries are not yet streamed to the browser UI.
 - macOS/Linux/Windows: plugin FFI can build, but CLI discovery/attach is

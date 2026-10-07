@@ -78,6 +78,8 @@ jobs:
         run: bash dart/sqlite_spect/scripts/build_android.sh
         env:
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          # Baked into `server.info` alongside the CLI binaries.
+          SQLITE_SPECT_CLI_VERSION: ${{ github.ref_name }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -128,6 +130,11 @@ jobs:
       - name: Build CLI
         working-directory: crates/sqlite_spect_core
         run: cargo build --release --features cli --target ${{ matrix.target }} --bin sqlite_spect
+        env:
+          # Baked into `sqlite_spect --version` (option_env! in src/main.rs).
+          # Without this the binary would report the crate version, which is
+          # versioned independently of releases.
+          SQLITE_SPECT_CLI_VERSION: ${{ github.ref_name }}
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
@@ -176,6 +183,9 @@ jobs:
 
       - name: Build iOS xcframework
         run: bash dart/sqlite_spect/scripts/build_ios.sh
+        env:
+          # Baked into `server.info` alongside the CLI binaries.
+          SQLITE_SPECT_CLI_VERSION: ${{ github.ref_name }}
 
       - uses: actions/upload-artifact@v4
         with:

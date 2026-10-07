@@ -48,18 +48,31 @@ open up the inspector client on your browser.
 sqlite_spect attach
 ```
 
-> **Android only right now.** iOS is still in the works.
-
 ### Attach options
 
 ```bash
-sqlite_spect attach [--watch] [--port PORT] [--serial SERIAL]
+sqlite_spect attach [--platform PLATFORM] [--port PORT] [--serial SERIAL] [--pid PID] [--json] [--no-browser]
 ```
 
-* `--watch` — (Android only) keep the adb forward alive; re-opens the browser on reconnect.
-* `--port PORT` — override the default port (8123). **If you use this, pass the
+Two discovery channels, selected by `--platform`:
+
+* `--platform android` *(default)* — connects through adb: forwards the
+  device port to your machine and opens `http://127.0.0.1:8123`.
+  Fully supported (emulator and physical devices).
+* `--platform ios` — network discovery via mDNS: the inspector announces
+  itself on the local network and `attach` finds it — no IP guessing
+  needed. Verified on the iOS simulator; physical devices on the same
+  Wi-Fi should work the same way (not yet hardware-tested).
+
+Flags:
+
+* `--watch` — (android only) keep the adb forward alive; re-opens the browser on reconnect.
+* `--port PORT` — (android only) override the default port (8123). **If you use this, pass the
   same port to `Inspector.start(port: PORT)` in your app.**
-* `--serial SERIAL` — (Android only) target a specific device. Run `adb devices` to list serials.
+* `--serial SERIAL` — (android only) target a specific device. Run `adb devices` to list serials.
+* `--pid PID` — (ios only) pick a specific instance when several inspectors are discovered.
+* `--json` — print the result as one JSON document (with `--no-browser`, for scripts).
+* `--no-browser` — don't open a browser; just print the URL.
 
 Example:
 
@@ -75,6 +88,59 @@ await Inspector.start(
   databases: [InspectedDatabase(id: 'main', path: dbPath)],
 );
 ```
+
+## Scripting / headless use
+
+The server speaks JSON-RPC 2.0 over plain HTTP (`POST /rpc`) in addition to
+the browser's WebSocket — so `curl` (or any HTTP client, LLM agents
+included) can inspect databases without a browser:
+
+```bash
+# Discover what the server can do:
+curl -s 127.0.0.1:8123/rpc -d \
+  '{"jsonrpc":"2.0","id":1,"method":"server.info"}'
+
+# List databases, then query one:
+curl -s 127.0.0.1:8123/rpc -d \
+  '{"jsonrpc":"2.0","id":1,"method":"db.list"}'
+curl -s 127.0.0.1:8123/rpc -d \
+  '{"jsonrpc":"2.0","id":2,"method":"db.query",
+    "params":{"db":"main","sql":"SELECT * FROM users LIMIT 5"}}'
+```
+
+Notes: protocol-level errors come back as JSON-RPC error objects with HTTP
+200. Batching and notifications (id-less requests) are rejected — they need
+the WebSocket's push channel, as do `db.subscribe`/`db.unsubscribe`
+(error `-32010`).
+
+You can also inspect a local SQLite file with no app attached:
+
+```bash
+sqlite_spect serve /path/to/db.sqlite --json
+# stdout: {"url":"http://127.0.0.1:8123/","port":8123,"databases":["db"],...}
+```
+
+`serve` binds to `127.0.0.1` by default; pass `--host 0.0.0.0` to expose it
+to the network (debug tooling only — anyone reachable can read and write
+the database).
+
+### JSON-RPC method reference
+
+| Method | Params | Notes |
+|---|---|---|
+| `server.info` | — | version, platform, transports, full method list |
+| `db.list` | — | registered database ids |
+| `db.schema` | `db` | tables/indexes/triggers/views |
+| `db.tableInfo` | `db`, `table` | columns |
+| `db.query` | `db`, `sql`, `params?`, `limit?`, `offset?` | read-only `SELECT` |
+| `db.execute` | `db`, `sql`, `params?` | arbitrary statement |
+| `db.tableRows` | `db`, `table`, `limit?`, `offset?` | paged rows |
+| `db.updateRow` | `db`, `table`, `rowKey`, `updates` | |
+| `db.insertRow` | `db`, `table`, `values` | |
+| `db.deleteRow` | `db`, `table`, `rowKey` | |
+| `db.clearTable` | `db`, `table`, `confirm` | |
+| `db.subscribe` / `db.unsubscribe` | see above | WebSocket only |
+| `probe.tail` / `probe.untail` | — | stubbed (not yet implemented) |
 
 ## Isolate rules
 

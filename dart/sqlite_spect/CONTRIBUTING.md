@@ -6,7 +6,7 @@
 - Android (plugin + CLI discovery/attach)
 
 **Partial:**
-- iOS (plugin FFI works, but CLI discovery/attach not implemented)
+- iOS (plugin FFI works; CLI attach via mDNS — simulator verified, physical devices untested)
 
 **Not yet supported:**
 - macOS, Linux, Windows (plugin, CLI discovery/attach)
@@ -80,9 +80,14 @@ investigated. The gate is client-side only, in
 server RPCs remain available and the SQL Runner still executes arbitrary SQL,
 with an on-screen warning that write statements may corrupt the database.
 
-**iOS `attach`** — `cmd_attach_ios` in `crates/sqlite_spect_core/src/attach.rs`
-exits immediately with an error. Needs implementation for both simulator (simctl)
-and physical device (mDNS) discovery.
+**iOS `attach`** — `--platform ios` in `crates/sqlite_spect_core/src/attach.rs`
+discovers inspectors on the local network via mDNS; same-host hits
+(simulator apps share the host network) are rewritten to 127.0.0.1.
+Physical devices need same-network Wi-Fi and are untested on hardware.
+
+Note: the iOS plugin only links because `ios/Classes/FfiLink.swift`
+references the Rust archive's symbols from `register()` — without it the
+linker dead-strips the archive and `dlsym` finds nothing at runtime.
 
 **Probe streaming** — `Inspector.recordQuery` accepts calls and the Dart API is
 fully wired, but the server-side subscriber routing (`probe.tail` /
