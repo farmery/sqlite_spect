@@ -124,11 +124,11 @@ class Inspector {
       return;
     }
     developer.log(
-      '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
+      '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
       '  sqlite_spect\n'
       '    ${c.url}\n'
       '\n  Tip: run  sqlite_spect attach  on your Mac to auto-open.\n'
-      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       name: 'sqlite_spect',
     );
   }
@@ -188,9 +188,8 @@ class Inspector {
     final config = <String, dynamic>{
       'port': port,
       if (_platformOverride != null) 'platform': _platformOverride,
-      if (logLevel != null) 'logLevel': logLevel,
+      'logLevel': ?logLevel,
       'databases': databases.map((d) => d.toJson()).toList(),
-      // TODO: 'authKey': authKey, when auth is implemented
     };
     final ffi = InspectorFfi.load();
     final cfgPtr = jsonEncode(config).toNativeUtf8();
