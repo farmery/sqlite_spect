@@ -41,7 +41,6 @@ struct StartConfig {
     databases: Vec<StartDb>,
     #[serde(default, rename = "logLevel")]
     log_level: Option<String>,
-    // TODO: auth_key: Option<String>
 }
 
 #[derive(Deserialize, Debug)]
@@ -162,6 +161,8 @@ fn start_inner(config_json: *const c_char) -> Value {
         }
         Err(e) => return err(ERR_BIND_FAILED, &format!("bind failed: {}", e)),
     };
+
+    tracing::info!("sqlite_spect at http://127.0.0.1:{}", actual_port);
 
     let db_ids = registry.db_ids();
     banner::emit(&db_ids);
@@ -375,6 +376,14 @@ mod tests {
         f
     }
 
+    // The FFI keeps one global server slot, so tests that start/stop the
+    // inspector must not overlap — hold this guard for the whole test body.
+    static SUITE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn suite_lock() -> std::sync::MutexGuard<'static, ()> {
+        SUITE_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     fn ensure_stopped() {
         // Best-effort cleanup between tests. inspector_stop is idempotent.
         let ptr = inspector_stop();
@@ -383,6 +392,7 @@ mod tests {
 
     #[test]
     fn malformed_json_returns_101() {
+        let _suite = suite_lock();
         ensure_stopped();
         let c = cstr("not json");
         let resp = take_response(inspector_start(c.as_ptr()));
@@ -392,6 +402,7 @@ mod tests {
 
     #[test]
     fn empty_databases_returns_102() {
+        let _suite = suite_lock();
         ensure_stopped();
         let payload = json!({"port": 0, "databases": []});
         let c = cstr(&payload.to_string());
@@ -402,6 +413,7 @@ mod tests {
 
     #[test]
     fn nonexistent_db_returns_103() {
+        let _suite = suite_lock();
         ensure_stopped();
         let payload = json!({
             "port": 0,
@@ -415,6 +427,7 @@ mod tests {
 
     #[test]
     fn full_lifecycle_start_then_stop_releases_port() {
+        let _suite = suite_lock();
         ensure_stopped();
         let db = temp_db();
         let payload = json!({
@@ -447,6 +460,7 @@ mod tests {
 
     #[test]
     fn record_query_before_start_is_noop() {
+        let _suite = suite_lock();
         ensure_stopped();
         let payload = json!({
             "dbId": "x",
@@ -467,6 +481,7 @@ mod tests {
 
     #[test]
     fn duplicate_db_ids_rejected() {
+        let _suite = suite_lock();
         ensure_stopped();
         let db = temp_db();
         let payload = json!({
@@ -484,6 +499,7 @@ mod tests {
 
     #[test]
     fn invalid_db_id_characters_rejected() {
+        let _suite = suite_lock();
         ensure_stopped();
         let db = temp_db();
         let payload = json!({

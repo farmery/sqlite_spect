@@ -1,48 +1,74 @@
-// `sqlite_spect` discovery subcommands: `list`, `url`, `attach`.
+// `sqlite_spect attach` — the CLI's single discovery surface.
 //
-// Discovery channels
-// android: adb forward cfg.port, then open 127.0.0.1:cfg.port
-// ios simulator: use loopback (127.0.0.1:cfg.port, detected via simctl)
-// ios physical: use mdns discovery
-// (simctl / idevicesyslog channels for iOS are still TODO — spec §21.)
+// Two channels, selected by --platform:
+//   android: adb forward to the device's loopback inspector, then open
+//            http://127.0.0.1:<port> locally — adb is the tunnel, so the
+//            device's IP is never needed.
+//   ios:     mDNS network discovery. The inspector announces itself on the
+//            LAN at startup (see mdns.rs) and we can't guess its IP, so we
+//            browse for announcements. This finds ANY inspector on the
+//            network — iOS devices on Wi-Fi, desktop `serve` instances,
+//            other machines. The iOS simulator still needs simctl loopback
+//            detection (TODO — spec §21).
 
 use sqlite_spect_core::adb::AdbInfo;
 use sqlite_spect_core::DEFAULT_PORT;
-use std::process::{exit, Command};
-use std::time::Duration;
+use std::net::IpAddr;
+use std::process::exit;
+use std::time::{Duration, Instant};
 
+/// One inspector instance found via mDNS. `pid` and `platform` come from
+/// the service's TXT records, address and port from resolution.
 #[derive(Debug, Clone)]
 pub struct Discovered {
     pub url: String,
     pub port: u16,
     pub pid: u32,
     pub platform: String,
-    pub source: &'static str,
-    /// Device identifier (ADB serial for Android, UDID for iOS). None for mDNS.
-    pub device: Option<String>,
 }
 
-/// Scan every discovery channel we know about and return the union.
-pub fn discover_all(_device_filter: Option<&str>) -> Vec<Discovered> {
-    let mut out = Vec::new();
+/// Per-instance accumulator while browsing. mDNS resolves one instance once
+/// per interface/address family, so the same service fires multiple
+/// `ServiceResolved` events with different address subsets — collect them
+/// and pick the best address when the window closes.
+struct MdnsAcc {
+    pid: u32,
+    platform: String,
+    port: u16,
+    ipv4: Option<IpAddr>,
+    any: Option<IpAddr>,
+}
 
-    if let Some(mdns_hits) = try_discover_mdns(Duration::from_millis(600)) {
-        out.extend(mdns_hits);
+/// Prefer IPv4: link-local IPv6 (fe80::…) makes awkward and often
+/// unreachable URLs. IPv6 needs bracketing in URLs.
+fn url_for(addr: IpAddr, port: u16) -> String {
+    match addr {
+        IpAddr::V4(v4) => format!("http://{v4}:{port}"),
+        IpAddr::V6(v6) => format!("http://[{v6}]:{port}"),
     }
-
-    out
 }
 
-/// One-shot mDNS query. Returns `None` if mDNS is blocked / unavailable.
+impl MdnsAcc {
+    fn best_url(&self) -> String {
+        url_for(
+            self.ipv4.or(self.any).unwrap_or(IpAddr::from([127, 0, 0, 1])),
+            self.port,
+        )
+    }
+}
+
+/// One-shot mDNS browse. Returns `None` when mDNS itself is unavailable
+/// (blocked / no daemon) — callers treat that as "no hits this round".
 fn try_discover_mdns(wait: Duration) -> Option<Vec<Discovered>> {
     use mdns_sd::{ServiceDaemon, ServiceEvent};
     let daemon = ServiceDaemon::new().ok()?;
     let receiver = daemon.browse(sqlite_spect_core::mdns::SERVICE_TYPE).ok()?;
 
-    let deadline = std::time::Instant::now() + wait;
-    let mut hits = Vec::new();
+    let deadline = Instant::now() + wait;
+    let mut instances: std::collections::HashMap<String, MdnsAcc> =
+        std::collections::HashMap::new();
 
-    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match receiver.recv_timeout(remaining) {
             Ok(ServiceEvent::ServiceResolved(info)) => {
                 let props = info.get_properties();
@@ -55,21 +81,23 @@ fn try_discover_mdns(wait: Duration) -> Option<Vec<Discovered>> {
                     .unwrap_or("unknown")
                     .to_string();
                 let port = info.get_port();
-                let host_ip = info
-                    .get_addresses()
-                    .iter()
-                    .next()
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|| "127.0.0.1".into());
-                let url = format!("http://{}:{}", host_ip, port);
-                hits.push(Discovered {
-                    url,
-                    port,
-                    pid,
-                    platform,
-                    source: "mdns",
-                    device: None,
-                });
+
+                let acc = instances
+                    .entry(info.get_fullname().to_string())
+                    .or_insert(MdnsAcc {
+                        pid,
+                        platform,
+                        port,
+                        ipv4: None,
+                        any: None,
+                    });
+                for addr in info.get_addresses() {
+                    if addr.is_ipv4() {
+                        acc.ipv4.get_or_insert(*addr);
+                    } else {
+                        acc.any.get_or_insert(*addr);
+                    }
+                }
             }
             Ok(_other) => {}
             Err(_timeout_or_disc) => break,
@@ -83,140 +111,152 @@ fn try_discover_mdns(wait: Duration) -> Option<Vec<Discovered>> {
     if let Ok(rx) = daemon.shutdown() {
         let _ = rx.recv_timeout(Duration::from_millis(200));
     }
-    Some(hits)
-}
-// ============================================================================
-// Commands
-// ============================================================================
-
-pub async fn cmd_list() {
-    let hits = discover_all(None);
-    if hits.is_empty() {
-        println!("no running sqlite_spect instances found");
-        return;
-    }
-
-    println!(
-        "{:<8} {:<6} {:<10} {:<12} {:<18} {}",
-        "PID", "PORT", "PLATFORM", "SOURCE", "DEVICE", "URL"
-    );
-    for d in &hits {
-        println!(
-            "{:<8} {:<6} {:<10} {:<12} {:<18} {}",
-            d.pid,
-            d.port,
-            d.platform,
-            d.source,
-            d.device.as_deref().unwrap_or("-"),
-            d.url
-        );
-    }
+    Some(
+        instances
+            .into_values()
+            .map(|acc| Discovered {
+                url: acc.best_url(),
+                port: acc.port,
+                pid: acc.pid,
+                platform: acc.platform,
+            })
+            .collect(),
+    )
 }
 
-pub async fn cmd_url(args: &[String]) {
-    let mut target_pid: Option<u32> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--pid" => {
-                i += 1;
-                target_pid = args.get(i).and_then(|s| s.parse().ok());
-            }
-            _ => {}
-        }
-        i += 1;
-    }
+// ============================================================================
+// attach
+// ============================================================================
 
-    let hits = discover_all(None);
-    let picked = match target_pid {
-        Some(pid) => hits.into_iter().find(|d| d.pid == pid),
-        None => match hits.len() {
-            0 => None,
-            1 => Some(hits.into_iter().next().unwrap()),
-            _ => {
-                eprintln!("multiple instances found — use --pid <N> to disambiguate:");
-                for d in &hits {
-                    eprintln!("  pid={} port={} device={} {}",
-                        d.pid, d.port, d.device.as_deref().unwrap_or("-"), d.url);
-                }
-                exit(2);
-            }
-        },
-    };
-
-    match picked {
-        Some(d) => println!("{}", d.url),
-        None => {
-            eprintln!("no matching instance");
-            exit(1);
-        }
-    }
+struct AttachArgs {
+    port: u16,
+    platform: String,
+    serial: Option<String>,
+    pid: Option<u32>,
+    watch: bool,
+    no_browser: bool,
+    timeout_secs: u64,
+    json: bool,
 }
 
 pub async fn cmd_attach(args: &[String]) {
+    let parsed = match parse_attach_args(args) {
+        Ok(p) => p,
+        Err(msg) => super::usage_error(&msg),
+    };
+    if let Err(msg) = validate(&parsed) {
+        super::usage_error(&msg);
+    }
+
+    match parsed.platform.as_str() {
+        // parse_attach_args only lets "android"/"ios" through.
+        "android" => cmd_attach_android(&parsed).await,
+        _ => cmd_attach_ios(&parsed).await,
+    }
+}
+
+/// Cross-flag rules, separate from parsing so they're unit-testable.
+fn validate(a: &AttachArgs) -> Result<(), String> {
+    if a.watch && a.json {
+        // --watch streams progress; the JSON contract is "stdout is exactly
+        // one document". NDJSON events are designed but not built yet.
+        return Err("--json with --watch is not supported yet".into());
+    }
+    if a.watch && a.platform == "ios" {
+        return Err("--watch is not supported with --platform ios yet".into());
+    }
+    Ok(())
+}
+
+fn parse_attach_args(args: &[String]) -> Result<AttachArgs, String> {
     let mut port: Option<u16> = None;
     let mut platform: Option<String> = None;
     let mut serial: Option<String> = None;
+    let mut pid: Option<u32> = None;
     let mut watch = false;
     let mut no_browser = false;
-    let mut timeout_secs: u64 = 60;
-    let mut i = 0;
+    let mut timeout_secs: Option<u64> = None;
+    let mut json = false;
 
+    let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
+        let arg = args[i].as_str();
+        match arg {
+            "-h" | "--help" => super::print_help(),
             "--port" => {
                 i += 1;
-                port = args.get(i).and_then(|s| s.parse().ok());
+                let value = super::take_value(args, i, "--port")?;
+                port = Some(value.parse().map_err(|_| {
+                    format!("invalid --port value: '{value}' (expected 1-65535)")
+                })?);
             }
             "--platform" => {
                 i += 1;
-                platform = args.get(i).cloned();
+                let value = super::take_value(args, i, "--platform")?;
+                if value != "android" && value != "ios" {
+                    return Err(format!(
+                        "unknown platform '{value}' (expected 'android' or 'ios')"
+                    ));
+                }
+                platform = Some(value);
             }
             "--serial" => {
                 i += 1;
-                serial = args.get(i).cloned();
+                serial = Some(super::take_value(args, i, "--serial")?);
+            }
+            "--pid" => {
+                i += 1;
+                let value = super::take_value(args, i, "--pid")?;
+                pid = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("invalid --pid value: '{value}' (expected a process id)"))?,
+                );
             }
             "--watch" => watch = true,
             "--no-browser" => no_browser = true,
             "--timeout" => {
                 i += 1;
-                timeout_secs = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(60);
+                let value = super::take_value(args, i, "--timeout")?;
+                timeout_secs = Some(value.parse().map_err(|_| {
+                    format!("invalid --timeout value: '{value}' (expected seconds)")
+                })?);
             }
-            _ => {}
+            "--json" => json = true,
+            _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}")),
+            _ => return Err(format!("unexpected argument: {arg}")),
         }
         i += 1;
     }
 
-    let port = port.unwrap_or(DEFAULT_PORT);
-    let platform = platform.unwrap_or_else(|| "android".to_string());
-
-    match platform.as_str() {
-        "android" => cmd_attach_android(port, serial, watch, no_browser, timeout_secs).await,
-        "ios" => cmd_attach_ios(port, serial, watch, no_browser, timeout_secs).await,
-        _ => {
-            eprintln!("✗ Unknown platform: {}. Use 'android' or 'ios'.", platform);
-            exit(1);
-        }
-    }
+    Ok(AttachArgs {
+        port: port.unwrap_or(DEFAULT_PORT),
+        platform: platform.unwrap_or_else(|| "android".to_string()),
+        serial,
+        pid,
+        watch,
+        no_browser,
+        timeout_secs: timeout_secs.unwrap_or(60),
+        json,
+    })
 }
 
-async fn cmd_attach_android(
-    port: u16,
-    serial: Option<String>,
-    watch: bool,
-    no_browser: bool,
-    timeout_secs: u64,
-) {
+// ============================================================================
+// android channel: adb forward → loopback URL
+// ============================================================================
+
+async fn cmd_attach_android(args: &AttachArgs) {
     let Some(adb) = AdbInfo::is_available() else {
         eprintln!("✗ adb not found on PATH. Install Android SDK platform-tools.");
         exit(1);
     };
 
-    let device_filter = serial.as_deref();
+    let port = args.port;
+    let device_filter = args.serial.as_deref();
     let url = format!("http://127.0.0.1:{}", port);
     let mut established_forward = false;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);
     let mut opened_browser = false;
 
     loop {
@@ -262,21 +302,28 @@ async fn cmd_attach_android(
             }
 
             if !opened_browser {
-                println!("✔ Connected to device: {}", dev);
-                println!("✔ URL: {}", url);
-                if !no_browser {
+                if args.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "url": url, "port": port, "serial": dev, "via": "adb" })
+                    );
+                } else {
+                    println!("✔ Connected to device: {}", dev);
+                    println!("✔ URL: {}", url);
+                }
+                if !args.no_browser {
                     open_browser(&url);
                 }
                 opened_browser = true;
             }
 
-            if !watch {
+            if !args.watch {
                 return;
             }
         }
 
-        if !watch && std::time::Instant::now() >= deadline {
-            eprintln!("✗ No device found in {}s.", timeout_secs);
+        if !args.watch && Instant::now() >= deadline {
+            eprintln!("✗ No device found in {}s.", args.timeout_secs);
             eprintln!(
                 "  Check that:\n\
                  \x20   • adb sees the device (run: adb devices)\n\
@@ -289,18 +336,113 @@ async fn cmd_attach_android(
     }
 }
 
-async fn cmd_attach_ios(
-    port: u16,
-    serial: Option<String>,
-    _watch: bool,
-    no_browser: bool,
-    _timeout_secs: u64,
-) {
-    // TODO: iOS implementation
-    // For simulator: use simctl to detect, then use loopback
-    // For physical device: use mdns discovery
-    eprintln!("✗ iOS attach is not yet implemented");
-    exit(1);
+// ============================================================================
+// ios channel: mDNS network discovery
+// ============================================================================
+
+/// Outcome of filtering discovered instances against an optional --pid.
+enum Pick<'a> {
+    None,
+    One(&'a Discovered),
+    Many(Vec<&'a Discovered>),
+}
+
+fn pick_mdns_target(hits: &[Discovered], pid: Option<u32>) -> Pick<'_> {
+    let candidates: Vec<&Discovered> = match pid {
+        Some(p) => hits.iter().filter(|h| h.pid == p).collect(),
+        None => hits.iter().collect(),
+    };
+    match candidates.len() {
+        0 => Pick::None,
+        1 => Pick::One(candidates[0]),
+        _ => Pick::Many(candidates),
+    }
+}
+
+/// Rewrite `http://<local-ip>:<port>` to `http://127.0.0.1:<port>` so a
+/// same-machine hit (e.g. a `serve` bound to loopback only) stays reachable.
+fn rewrite_url_host(url: &str, local_ips: &[IpAddr]) -> String {
+    for ip in local_ips {
+        let host = format!("://{ip}:");
+        if url.contains(&host) {
+            return url.replace(&host, "://127.0.0.1:");
+        }
+    }
+    url.to_string()
+}
+
+fn rewrite_same_host(mut hit: Discovered) -> Discovered {
+    let local_ips: Vec<IpAddr> = if_addrs::get_if_addrs()
+        .map(|addrs| addrs.iter().map(|a| a.ip()).collect())
+        .unwrap_or_default();
+    hit.url = rewrite_url_host(&hit.url, &local_ips);
+    hit
+}
+
+async fn cmd_attach_ios(args: &AttachArgs) {
+    let deadline = Instant::now() + Duration::from_secs(args.timeout_secs);
+
+    loop {
+        let hits = try_discover_mdns(Duration::from_millis(600)).unwrap_or_default();
+        match pick_mdns_target(&hits, args.pid) {
+            Pick::One(hit) => {
+                let hit = rewrite_same_host(hit.clone());
+                if args.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "url": hit.url, "port": hit.port, "pid": hit.pid,
+                            "platform": hit.platform, "via": "mdns",
+                        })
+                    );
+                } else {
+                    println!("✔ Found inspector (platform: {}, pid: {})", hit.platform, hit.pid);
+                    println!("✔ URL: {}", hit.url);
+                }
+                if !args.no_browser {
+                    open_browser(&hit.url);
+                }
+                return;
+            }
+            Pick::Many(hits) => {
+                if args.json {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({
+                            "error": "multiple instances found — use --pid <N>",
+                            "instances": hits.iter().map(|h| serde_json::json!({
+                                "url": h.url, "pid": h.pid, "port": h.port, "platform": h.platform,
+                            })).collect::<Vec<_>>(),
+                        })
+                    );
+                } else {
+                    eprintln!("✗ Multiple inspectors found — pick one with --pid <N>:");
+                    for h in &hits {
+                        eprintln!("    --pid {}   (platform: {}, {})", h.pid, h.platform, h.url);
+                    }
+                }
+                exit(2);
+            }
+            Pick::None => {}
+        }
+
+        if Instant::now() >= deadline {
+            if let Some(pid) = args.pid {
+                eprintln!("✗ No inspector with pid {pid} found.");
+            } else {
+                eprintln!("✗ No inspector found on the network in {}s.", args.timeout_secs);
+            }
+            eprintln!(
+                "  Check that:\n\
+                 \x20   • The app is running with sqlite_spect enabled\n\
+                 \x20   • The device and this machine are on the same network\n\
+                 \x20   \x20 (mDNS/multicast must not be blocked)"
+            );
+            exit(1);
+        }
+
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
 }
 
 fn open_browser(url: &str) {
@@ -317,3 +459,169 @@ fn open_browser(url: &str) {
         .and_then(|mut c| c.wait());
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn hit(pid: u32, url: &str) -> Discovered {
+        Discovered {
+            url: url.to_string(),
+            port: 8123,
+            pid,
+            platform: "macos".into(),
+        }
+    }
+
+    #[test]
+    fn attach_args_defaults() {
+        let a = parse_attach_args(&args(&[])).unwrap();
+        assert_eq!(a.port, DEFAULT_PORT);
+        assert_eq!(a.platform, "android");
+        assert!(a.serial.is_none());
+        assert!(a.pid.is_none());
+        assert!(!a.watch);
+        assert!(!a.no_browser);
+        assert_eq!(a.timeout_secs, 60);
+        assert!(!a.json);
+    }
+
+    #[test]
+    fn attach_args_parse_all_flags() {
+        let a = parse_attach_args(&args(&[
+            "--port",
+            "9000",
+            "--serial",
+            "emulator-5554",
+            "--platform",
+            "ios",
+            "--pid",
+            "4211",
+            "--no-browser",
+            "--timeout",
+            "5",
+        ]))
+        .unwrap();
+        assert_eq!(a.port, 9000);
+        assert_eq!(a.platform, "ios");
+        assert_eq!(a.serial.as_deref(), Some("emulator-5554"));
+        assert_eq!(a.pid, Some(4211));
+        assert!(!a.watch);
+        assert!(a.no_browser);
+        assert_eq!(a.timeout_secs, 5);
+    }
+
+    #[test]
+    fn attach_args_json_flag_parses() {
+        let a = parse_attach_args(&args(&["--json"])).unwrap();
+        assert!(a.json);
+    }
+
+    #[test]
+    fn attach_args_reject_unknown_flag_and_positional() {
+        assert!(parse_attach_args(&args(&["--jsonx"])).is_err());
+        assert!(parse_attach_args(&args(&["oops"])).is_err());
+    }
+
+    #[test]
+    fn attach_args_reject_invalid_values() {
+        assert!(parse_attach_args(&args(&["--timeout", "abc"])).is_err());
+        assert!(parse_attach_args(&args(&["--timeout"])).is_err());
+        assert!(parse_attach_args(&args(&["--port", "abc"])).is_err());
+        assert!(parse_attach_args(&args(&["--port"])).is_err());
+        assert!(parse_attach_args(&args(&["--serial"])).is_err());
+        assert!(parse_attach_args(&args(&["--pid", "abc"])).is_err());
+        assert!(parse_attach_args(&args(&["--pid"])).is_err());
+        assert!(parse_attach_args(&args(&["--platform", "windows"])).is_err());
+        assert!(parse_attach_args(&args(&["--platform"])).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_watch_json_and_watch_ios() {
+        let mut a = parse_attach_args(&args(&["--watch", "--json"])).unwrap();
+        assert!(validate(&a).is_err());
+
+        a = parse_attach_args(&args(&["--watch", "--platform", "ios"])).unwrap();
+        assert!(validate(&a).is_err());
+
+        a = parse_attach_args(&args(&["--watch", "--platform", "android"])).unwrap();
+        assert!(validate(&a).is_ok());
+    }
+
+    #[test]
+    fn url_for_formats_ipv4_and_brackets_ipv6() {
+        assert_eq!(
+            url_for(IpAddr::from([192, 168, 1, 5]), 8123),
+            "http://192.168.1.5:8123"
+        );
+        assert_eq!(
+            url_for("fe80::1".parse().unwrap(), 8123),
+            "http://[fe80::1]:8123"
+        );
+    }
+
+    #[test]
+    fn mdns_acc_prefers_ipv4_over_ipv6() {
+        let acc = MdnsAcc {
+            pid: 1,
+            platform: "macos".into(),
+            port: 8123,
+            ipv4: Some(IpAddr::from([10, 0, 0, 5])),
+            any: Some("fe80::1".parse().unwrap()),
+        };
+        assert_eq!(acc.best_url(), "http://10.0.0.5:8123");
+
+        let acc = MdnsAcc {
+            pid: 1,
+            platform: "macos".into(),
+            port: 8123,
+            ipv4: None,
+            any: Some("fe80::1".parse().unwrap()),
+        };
+        assert_eq!(acc.best_url(), "http://[fe80::1]:8123");
+    }
+
+    #[test]
+    fn pick_returns_none_one_or_many() {
+        assert!(matches!(pick_mdns_target(&[], None), Pick::None));
+
+        let hits = vec![hit(1, "http://10.0.0.5:8123")];
+        assert!(matches!(pick_mdns_target(&hits, None), Pick::One(_)));
+
+        let hits = vec![hit(1, "http://10.0.0.5:8123"), hit(2, "http://10.0.0.9:8123")];
+        assert!(matches!(pick_mdns_target(&hits, None), Pick::Many(_)));
+    }
+
+    #[test]
+    fn pick_filters_by_pid() {
+        let hits = vec![hit(1, "http://10.0.0.5:8123"), hit(2, "http://10.0.0.9:8123")];
+        assert!(matches!(pick_mdns_target(&hits, Some(2)), Pick::One(h) if h.pid == 2));
+        assert!(matches!(pick_mdns_target(&hits, Some(99)), Pick::None));
+    }
+
+    #[test]
+    fn rewrite_url_host_targets_local_ips_only() {
+        let local = vec![
+            IpAddr::from([192, 168, 1, 42]),
+            IpAddr::from([127, 0, 0, 1]),
+        ];
+        assert_eq!(
+            rewrite_url_host("http://192.168.1.42:8123", &local),
+            "http://127.0.0.1:8123"
+        );
+        // Foreign address stays untouched.
+        assert_eq!(
+            rewrite_url_host("http://10.0.0.5:8123", &local),
+            "http://10.0.0.5:8123"
+        );
+        // Already loopback stays as-is.
+        assert_eq!(
+            rewrite_url_host("http://127.0.0.1:8123", &local),
+            "http://127.0.0.1:8123"
+        );
+        assert_eq!(rewrite_url_host("http://10.0.0.5:8123", &[]), "http://10.0.0.5:8123");
+    }
+}
